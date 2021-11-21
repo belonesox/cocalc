@@ -28,6 +28,8 @@ export function versionCheckFails(req, res?): boolean {
      also used in the frontend code file @cocalc/frontend/set-version-cookie.js
      but everybody imports it from @cocalc/util/consts.
   */
+  return false; // !!! Temp hack, cannot get why no cookies "cocalc_version" is set. Need Research
+//   const vcn = versionCookieName(base_path);
   const rawVal = cookies.get(versionCookieName(base_path));
   const version = parseInt(rawVal);
   winston.debug(`version check version=${version}, minVersion=${minVersion}`);
