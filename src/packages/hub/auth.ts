@@ -490,6 +490,7 @@ export class PassportManager {
     // this prevents leaking that token to 3rd parties as a referrer
     // endpoint has to match with @cocalc/hub/password
     this.router.get(`${AUTH_BASE}/password_reset`, (req, res) => {
+      debugger;  
       if (typeof req.query.token !== "string") {
         res.send("ERROR: reset token must be set");
       } else {
@@ -497,9 +498,12 @@ export class PassportManager {
         const cookies = new Cookies(req, res);
         // to match @cocalc/frontend/client/password-reset
         const name = encodeURIComponent(`${base_path}PWRESET`);
+
+        const secure = (req.protocol === 'https');
+
         cookies.set(name, token, {
           maxAge: ms("5 minutes"),
-          secure: true,
+          secure: secure,
           overwrite: true,
           httpOnly: false,
         });
