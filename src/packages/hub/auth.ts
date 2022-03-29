@@ -665,7 +665,7 @@ export class PassportManager {
     if (userinfoURL != null) {
       // closure captures "strategy"
       strategy_instance.userProfile = function userProfile(accessToken, tokenSecret, params, done) {
-        logger.debug(`userinfoURL=${userinfoURL}, accessToken=${accessToken}`);
+        logger.debug(`userinfoURL=${userinfoURL}, accessToken=${accessToken}, params=`, params);
 
         var oauth_ = this._oauth;
         if (this._oauth2) {
