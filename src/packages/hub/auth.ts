@@ -32,6 +32,7 @@
 // 2. insert into passport_settings (strategy , conf ) VALUES ( 'google', '{"clientID": "....apps.googleusercontent.com", "clientSecret": "..."}'::JSONB )
 //
 // Then restart the hubs.
+import jwt_decode from "jwt-decode";
 
 import { Router } from "express";
 import ms from "ms";
@@ -241,21 +242,34 @@ const TwitterStrategyConf: StrategyConf = {
   },
 };
 
+
 // generalized OpenID (OAuth2) profile parser for the "userinfo" endpoint
 // the returned structure matches passport.js's conventions
 function parse_openid_profile(json: any) {
   const profile: any = {};
   profile.id = json.sub || json.id;
   profile.displayName = json.name;
+
+  var first_email;
+  if (json.emails) first_email = json.emails[0];
+  if (json.email) first_email = json.email;
+
+
   if (json.family_name || json.given_name) {
     profile.name = {
       familyName: json.family_name,
       givenName: json.given_name,
     };
     // no name? we use the email address
-  } else if (json.email) {
+  } else if (json.realname) {
+    const [first, ...last] = json.realname.split(" ");
+    profile.name = {
+        givenName: first,
+        familyName: last.join(" "),
+    };
+  } else if (first_email) {
     // don't include dots, because our "spam protection" rejects domain-like patterns
-    const emailacc = json.email.split("@")[0].split(".");
+    const emailacc = first_email.split("@")[0].split(".");
     const [first, ...last] = emailacc; // last is always at least []
     profile.name = {
       givenName: first,
@@ -263,11 +277,11 @@ function parse_openid_profile(json: any) {
     };
   }
 
-  if (json.email) {
+  if (first_email) {
     profile.emails = [
       {
-        value: json.email,
-        verified: json.email_verified || json.verified_email,
+        value: first_email,
+        verified: json.email_verified || json.verified_email || json.confirmed_email,
       },
     ];
   }
@@ -647,11 +661,15 @@ export class PassportManager {
     // https://github.com/passport-next/passport-oauth2/blob/master/lib/strategy.js#L276
     if (userinfoURL != null) {
       // closure captures "strategy"
-      strategy_instance.userProfile = function userProfile(accessToken, done) {
+      strategy_instance.userProfile = function userProfile(accessToken, tokenSecret, params, done) {
         logger.debug(`userinfoURL=${userinfoURL}, accessToken=${accessToken}`);
 
-        this._oauth2.useAuthorizationHeaderforGET(true);
-        this._oauth2.get(userinfoURL, accessToken, (err, body) => {
+        var oauth_ = this._oauth;
+        if (this._oauth2) {
+            this._oauth2.useAuthorizationHeaderforGET(true);
+            oauth_ = this._oauth2;
+        }    
+        oauth_.get(userinfoURL, accessToken, tokenSecret, (err, body) => {
           logger.debug(`get->body = ${body}`);
 
           let json;
@@ -688,14 +706,13 @@ export class PassportManager {
           }
 
           try {
-            json = JSON.parse(body);
+            json = jwt_decode(body);
           } catch (ex) {
             return done(new Error(`Failed to parse user profile -- ${body}`));
           }
 
           const profile = parse_openid_profile(json);
           profile.provider = strategy;
-          profile._raw = body;
           logger.debug(
             `PassportStrategyConstructor.userProfile: profile = ${safeJsonStringify(
               profile
