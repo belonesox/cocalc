@@ -2,7 +2,7 @@
 Edit with either plain text input **or** WYSIWYG slate-based input.
 */
 
-import { useEffect } from "react";
+import { MutableRefObject, useEffect } from "react";
 import { Radio } from "antd";
 import "@cocalc/frontend/editors/slate/elements/math/math-widget";
 import { EditableMarkdown } from "@cocalc/frontend/editors/slate/editable-markdown";
@@ -44,6 +44,13 @@ interface Props {
   defaultMode?: Mode; // defaults to editor or whatever was last used (as stored in localStorage)
   fixedMode?: Mode; // only use this mode; no option to switch
   onChange: (value: string) => void;
+
+  // use getValueRef to obtain a function getValueRef.current() that returns the current
+  // value of the editor *NOW*, without waiting for onChange. Even with saveDebounceMs=0,
+  // there is definitely no guarantee that onChange is always up to date, but definitely
+  // up to date values are required to implement realtime sync!
+  getValueRef?: MutableRefObject<() => string>;
+
   onModeChange?: (mode: Mode) => void;
   onShiftEnter?: (value: string) => void;
   placeholder?: string;
@@ -113,6 +120,7 @@ export default function MultiMarkdownInput({
   defaultMode,
   fixedMode,
   onChange,
+  getValueRef,
   onModeChange,
   onShiftEnter,
   placeholder,
@@ -128,7 +136,7 @@ export default function MultiMarkdownInput({
   extraHelp,
   lineWrapping,
   lineNumbers,
-  saveDebounceMs = 0,
+  saveDebounceMs,
   hideHelp,
   onBlur,
   onFocus,
@@ -254,7 +262,6 @@ export default function MultiMarkdownInput({
               ...(mode == "editor" || hideHelp
                 ? {
                     position: "absolute",
-                    top: 0,
                     right: 0,
                     zIndex: 1,
                   }
@@ -293,6 +300,7 @@ export default function MultiMarkdownInput({
           value={value}
           onChange={onChange}
           saveDebounceMs={saveDebounceMs}
+          getValueRef={getValueRef}
           project_id={project_id}
           path={path}
           enableUpload={enableUpload}
@@ -364,6 +372,7 @@ export default function MultiMarkdownInput({
             height={height}
             editBarStyle={editBarStyle}
             saveDebounceMs={saveDebounceMs}
+            getValueRef={getValueRef}
             actions={{
               set_value: (value) => {
                 onChange?.(value);

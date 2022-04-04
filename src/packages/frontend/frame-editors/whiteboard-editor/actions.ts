@@ -7,14 +7,22 @@
 Whiteboard FRAME Editor Actions
 */
 
-import { Map } from "immutable";
+import { Map as ImmutableMap } from "immutable";
 import { FrameTree } from "../frame-tree/types";
 import {
   Actions as BaseActions,
   CodeEditorState,
 } from "../code-editor/actions";
 import { Tool } from "./tools/spec";
-import { Data, Element, ElementsMap, Point, Rect, Placement } from "./types";
+import {
+  Data,
+  Element,
+  ElementsMap,
+  ElementType,
+  Point,
+  Rect,
+  Placement,
+} from "./types";
 import { uuid } from "@cocalc/util/misc";
 import {
   DEFAULT_GAP,
@@ -46,7 +54,7 @@ import { pasteFromInternalClipboard } from "./tools/clipboard";
 
 export interface State extends CodeEditorState {
   elements?: ElementsMap;
-  introspect?: Map<string, any>; // used for jupyter cells -- displayed in a separate frame.
+  introspect?: ImmutableMap<string, any>; // used for jupyter cells -- displayed in a separate frame.
 }
 
 export class Actions extends BaseActions<State> {
@@ -63,7 +71,7 @@ export class Actions extends BaseActions<State> {
     this.setState({});
     this._syncstring.on("change", (keys) => {
       const elements0 = this.store.get("elements");
-      let elements = elements0 ?? Map({});
+      let elements = elements0 ?? ImmutableMap({});
       keys.forEach((key) => {
         const id = key.get("id");
         if (id) {
@@ -148,7 +156,14 @@ export class Actions extends BaseActions<State> {
     // TODO: algorithm for doing this is not particular efficient,
     // and scales with number of elements in scene.  It might
     // be much faster to restrict to nearby elements only...?
-    const elements = this.getElements();
+
+    // Note: if the element is not a frame itself, we don't move it
+    // so it avoids intersecting other frames.  E.g., if a note is
+    // in a frame, we should get another note possibly in the frame
+    // that is adjacent.
+    const filter =
+      element.type == "frame" ? undefined : (elt) => elt.get("type") != "frame";
+    const elements = this.getElements(filter);
     const p = placement.toLowerCase();
     const axis = p.includes("top") || p.includes("bottom") ? "x" : "y";
     moveUntilNotIntersectingAnything(element, elements, axis);
@@ -221,12 +236,35 @@ export class Actions extends BaseActions<State> {
     }
   }
 
+  private getGroupIds(): Set<string> {
+    const X = new Set<string>([]);
+    this.store.get("elements")?.map((element) => {
+      const group = element.get("group");
+      if (group != null) {
+        X.add(group);
+      }
+    });
+    return X;
+  }
+
+  private createGroupId(avoid?: Set<string>): string {
+    const X = this.getGroupIds();
+    while (true) {
+      const id = uuid().slice(0, 8);
+      if (!X.has(id) && (avoid == null || !avoid.has(id))) return id;
+    }
+  }
+
   getElement(id: string): Element | undefined {
     return this.store.getIn(["elements", id])?.toJS();
   }
 
-  private getElements(): Element[] {
-    return (elementsList(this.store.get("elements")) ?? []) as Element[];
+  private getElements(filter?: (ImmutableMap) => boolean): Element[] {
+    let elements = this.store.get("elements");
+    if (filter != null) {
+      elements = elements?.filter((elt) => elt != null && filter(elt));
+    }
+    return (elementsList(elements) ?? []) as Element[];
   }
 
   private getPageSpan(margin: number = 0) {
@@ -382,7 +420,7 @@ export class Actions extends BaseActions<State> {
   // Make it so the elements with the given list of ids
   // form a group.
   public groupElements(ids: string[]) {
-    const group = this.createId();
+    const group = this.createGroupId();
     // TODO: check that this group id isn't already in use
     for (const id of ids) {
       this.setElement({ obj: { id, group }, commit: false });
@@ -502,6 +540,8 @@ export class Actions extends BaseActions<State> {
   // Inserts the given elements, moving them so the center
   // of the rectangle spanned by all elements is the given
   // center point, or (0,0) if not given.
+  // ids of elements are updated to not conflict with existing ids.
+  // Also, any groups are remapped to new groups, to avoid "expanding" existing groups.
   // Returns the ids of the inserted elements.
   insertElements(elements: Element[], center?: Point): string[] {
     elements = cloneDeep(elements); // we will mutate it a lot
@@ -511,11 +551,20 @@ export class Actions extends BaseActions<State> {
     translateRectsZ(elements, this.getPageSpan().zMax + 1);
     const ids: string[] = [];
     const idMap: { [id: string]: string } = {};
+    const groupMap: { [id: string]: string } = {};
     for (const element of elements) {
       const newId = this.createId();
       idMap[element.id] = newId;
       ids.push(newId);
       element.id = newId;
+      if (element.group != null) {
+        let newGroupId = groupMap[element.group];
+        if (newGroupId == null) {
+          newGroupId = this.createGroupId(new Set(Object.keys(groupMap)));
+          groupMap[element.group] = newGroupId;
+        }
+        element.group = newGroupId;
+      }
     }
     // We adjust any edges below, discarding any that aren't
     // part of what is being pasted.
@@ -556,7 +605,12 @@ export class Actions extends BaseActions<State> {
       input: str ?? element.str ?? "",
       id,
       set: (obj) =>
-        this.setElementData({ element, obj, commit: true, cursors: [{}] }),
+        this.setElementData({
+          element,
+          obj: { ...obj, hideOutput: false },
+          commit: true,
+          cursors: [{}],
+        }),
     });
   }
 
@@ -659,26 +713,26 @@ export class Actions extends BaseActions<State> {
   // e.g., this is used to implemented "duplicate"; otherwise,
   // pastes to the center of the viewport.
   paste(
-    frameId: string,
+    frameId?: string,
     _value?: string | true | undefined,
     nextTo?: Element[]
   ): void {
     const pastedElements = pasteFromInternalClipboard();
-    let target: Point;
+    let target: Point = { x: 0, y: 0 };
     if (nextTo != null) {
       const { x, y, w, h } = rectSpan(nextTo);
       const w2 = rectSpan(pastedElements).w;
       target = { x: x + w + w2 / 2 + DEFAULT_GAP, y: y + h / 2 };
-    } else {
+    } else if (frameId != null) {
       const viewport = this._get_frame_node(frameId)?.get("viewport")?.toJS();
       if (viewport != null) {
         target = centerOfRect(viewport);
-      } else {
-        target = { x: 0, y: 0 };
       }
     }
     const ids = this.insertElements(pastedElements, target);
-    this.setSelectionMulti(frameId, ids);
+    if (frameId != null) {
+      this.setSelectionMulti(frameId, ids);
+    }
   }
 
   centerElement(id: string, frameId?: string) {
@@ -872,6 +926,13 @@ export class Actions extends BaseActions<State> {
     }
   }
 
+  duplicateElements(elements: Element[], frameId?: string) {
+    const elements0 = [...elements];
+    extendToIncludeEdges(elements0, this.getElements());
+    copyToClipboard(elements0);
+    this.paste(frameId, undefined, elements);
+  }
+
   getGroup(group: string): Element[] {
     const X: Element[] = [];
     if (!group) return X;
@@ -936,10 +997,24 @@ export class Actions extends BaseActions<State> {
   setEditFocus(id: string, editFocus: boolean): void {
     this.set_frame_tree({ id, editFocus });
   }
+
+  // this is useful for context panels, e.g., Jupyter
+  selectionContainsCellOfType(frameId: string, type: ElementType): boolean {
+    const selection = this._get_frame_node(frameId)?.get("selection");
+    if (!selection) return false;
+    const elements = this.store.get("elements");
+    if (elements == null) return false;
+    for (const id of selection) {
+      if (elements.getIn([id, "type"]) == type) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 export function elementsList(
-  elements?: Map<string, any>
+  elements?: ImmutableMap<string, any>
 ): Element[] | undefined {
   return elements
     ?.valueSeq()

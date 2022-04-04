@@ -5,11 +5,12 @@
 
 // Kernel display
 
+import { ReactNode } from "react";
 import { React, useRedux, CSS } from "../app-framework";
 import * as immutable from "immutable";
-import { Progress, Typography } from "antd";
+import { Popover, Popconfirm, Progress, Tooltip, Typography } from "antd";
 import { COLORS } from "@cocalc/util/theme";
-import { A, Icon, IconName, Loading, Tip } from "../components";
+import { A, Icon, IconName, Loading } from "../components";
 import { closest_kernel_match, rpad_html } from "@cocalc/util/misc";
 import { Logo } from "./logo";
 import { JupyterActions } from "./browser-actions";
@@ -235,13 +236,46 @@ export const Kernel: React.FC<KernelProps> = React.memo(
       }
     }
 
-    function get_kernel_tip(): string {
+    function kernelState(): ReactNode {
       if (backend_state === "running") {
         switch (kernel_state) {
           case "busy":
-            return "Kernel is busy";
+            return (
+              <>
+                Kernel is busy{" "}
+                <Tooltip title={"Interrupt the running computation"}>
+                  <a
+                    onClick={() => {
+                      // using actions rather than frame actions, since I want
+                      // this to work in places other than Jupyter notebooks.
+                      actions.signal("SIGINT");
+                    }}
+                  >
+                    (interrupt)
+                  </a>
+                </Tooltip>
+              </>
+            );
           case "idle":
-            return "Kernel is idle";
+            return (
+              <>
+                Kernel is idle{" "}
+                <Popconfirm
+                  title={
+                    "Terminal the kernel process? All variable state will be lost."
+                  }
+                  onConfirm={() => {
+                    actions.shutdown();
+                  }}
+                  okText={"Halt"}
+                  cancelText={"Cancel"}
+                >
+                  <Tooltip title={"Terminate the kernel process"}>
+                    <a>(halt...)</a>
+                  </Tooltip>
+                </Popconfirm>
+              </>
+            );
         }
       } else if (backend_state == "starting") {
         return "Kernel is starting";
@@ -275,7 +309,7 @@ export const Kernel: React.FC<KernelProps> = React.memo(
             borderRight: "1px solid grey",
           }}
         >
-          {get_kernel_tip()}
+          {kernelState()}
         </div>
       );
     }
@@ -288,14 +322,14 @@ export const Kernel: React.FC<KernelProps> = React.memo(
           : `Backend is ${
               BACKEND_STATE_HUMAN[backend_state] ?? backend_state
             }.`;
-      const kernel_tip = get_kernel_tip();
+      const kernel_tip = kernelState();
 
       const usage_tip = (
         <>
           <p>
             This shows this kernel's resource usage. The memory limit is
-            determined by the remining "free" memory of this project. Open the "
-            {PROJECT_INFO_TITLE}" tab see all activities of this project.
+            determined by the remaining "free" memory of this project. Open the
+            "{PROJECT_INFO_TITLE}" tab see all activities of this project.
           </p>
           <p>
             <Typography.Text type="secondary">
@@ -328,14 +362,14 @@ export const Kernel: React.FC<KernelProps> = React.memo(
         </span>
       );
       return (
-        <Tip
+        <Popover
+          mouseEnterDelay={1}
           title={title}
-          tip={tip}
+          content={<div style={{ maxWidth: "400px" }}>{tip}</div>}
           placement={"bottom"}
-          tip_style={{ maxWidth: "450px" }}
         >
           {body}
-        </Tip>
+        </Popover>
       );
     }
 

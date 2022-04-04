@@ -23,6 +23,7 @@ interface Props {
   onBlur?: () => void;
   isFocused?: boolean;
   cursors?: { [account_id: string]: any[] };
+  mode?;
 }
 
 export default function Input({
@@ -32,6 +33,7 @@ export default function Input({
   onBlur,
   isFocused,
   cursors,
+  mode,
 }: Props) {
   const frame = useFrameContext();
   const [complete, setComplete] = useState<Map<string, any> | undefined>(
@@ -59,7 +61,7 @@ export default function Input({
         id={element.id}
         onFocus={onFocus}
         onBlur={onBlur}
-        options={getCMOptions()}
+        options={getCMOptions(mode)}
         value={element.str ?? ""}
         complete={complete}
         cursors={fromJS(cursors)}
@@ -76,7 +78,6 @@ export default function Input({
               obj: { id: element.id, str },
               commit: false,
             });
-            console.log("using input ", cm.getValue());
             // evaluate in all cases
             frame.actions.runCodeElement({ id: element.id, str });
             // TODO: handle these cases
@@ -137,10 +138,10 @@ class Actions implements EditorActions {
     if (this.jupyter_actions != null) {
       return this.jupyter_actions;
     }
-    this.jupyter_actions = await getJupyterActions(
-      this.frame.project_id,
-      this.frame.path
-    );
+    this.jupyter_actions = await getJupyterActions({
+      project_id: this.frame.project_id,
+      path: this.frame.path,
+    });
     // patch some functions from JupyterActions to use ones defined
     // in this object:
     this.jupyter_actions.select_complete = this.select_complete.bind(this);
@@ -252,8 +253,7 @@ class Actions implements EditorActions {
   }
 }
 
-function getCMOptions() {
-  const mode = "python";
+function getCMOptions(mode) {
   const account = redux.getStore("account");
   const immutable_editor_settings = account?.get("editor_settings");
   const editor_settings = immutable_editor_settings?.toJS() ?? {};

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { redux } from "@cocalc/frontend/app-framework";
 import { Icon, TimeAgo } from "@cocalc/frontend/components";
 import { Element } from "../types";
@@ -13,6 +13,9 @@ import MultiMarkdownInput from "@cocalc/frontend/editors/markdown-input/multimod
 import useEditFocus from "./edit-focus";
 import { useDebouncedCallback } from "use-debounce";
 import Composing from "./chat-composing";
+import { useIsMountedRef } from "@cocalc/frontend/app-framework";
+import { delay } from "awaiting";
+import useWheel from "./scroll-wheel";
 
 import { ChatLog, getChatStyle, messageStyle } from "./chat-static";
 
@@ -56,6 +59,18 @@ function Conversation({ element, focused }: Props) {
     }
   }, [element, focused]);
 
+  const isMountedRef = useIsMountedRef();
+  const clearInput = async () => {
+    setInput("");
+    // There's a potential very slight chance that additional input
+    // from slate will get set in the next event loop, so we make
+    // sure to clear that.  This is due to how onChange and slate work.
+    await delay(1);
+    if (isMountedRef.current) {
+      setInput("");
+    }
+  };
+
   // When the component goes to be unmounted, we will fetch data if the input has changed.
   useEffect(
     () => () => {
@@ -63,6 +78,8 @@ function Conversation({ element, focused }: Props) {
     },
     [saveChat]
   );
+  const divRef = useRef<any>(null);
+  useWheel(divRef);
 
   return (
     <div style={getChatStyle(element)}>
@@ -78,6 +95,7 @@ function Conversation({ element, focused }: Props) {
       <Composing element={element} focused={focused} />
       {(focused || len(element.data) === 0) && (
         <div
+          ref={divRef}
           style={{ height: "125px", display: "flex" }}
           className={editFocus ? "nodrag" : undefined}
           onClick={() => {
@@ -92,6 +110,7 @@ function Conversation({ element, focused }: Props) {
           }}
         >
           <MultiMarkdownInput
+            saveDebounceMs={0}
             onFocus={() => {
               setEditFocus(true);
             }}
@@ -103,6 +122,7 @@ function Conversation({ element, focused }: Props) {
             hideHelp
             noVfill
             minimal
+            placeholder="Type a message..."
             height={"123px"}
             value={input}
             style={{
@@ -118,7 +138,7 @@ function Conversation({ element, focused }: Props) {
             onShiftEnter={(input) => {
               saveChat.cancel();
               actions.sendChat({ id: element.id, input });
-              setInput("");
+              clearInput();
             }}
             onUndo={() => {
               saveChat.cancel();
@@ -131,7 +151,7 @@ function Conversation({ element, focused }: Props) {
             editBarStyle={{
               visibility:
                 !editFocus || mode == "markdown" ? "hidden" : undefined,
-              top: "-36px",
+              bottom: "-36px",
               left: "122px",
               position: "absolute",
               boxShadow: "1px 3px 5px #ccc",
@@ -142,7 +162,7 @@ function Conversation({ element, focused }: Props) {
             }}
             modeSwitchStyle={{
               visibility: !editFocus ? "hidden" : undefined,
-              top: "-31px",
+              bottom: "-30px",
               left: 0,
               width: "126px",
               boxShadow: "1px 3px 5px #ccc",
@@ -156,7 +176,7 @@ function Conversation({ element, focused }: Props) {
               style={{ height: "100%", marginLeft: "5px" }}
               onClick={() => {
                 actions.sendChat({ id: element.id, input });
-                setInput("");
+                clearInput();
               }}
             >
               Send

@@ -2,7 +2,8 @@ import { ReactNode } from "react";
 
 // TODO: terrible icons...  need to add more.
 import { IconName } from "@cocalc/frontend/components/icon";
-import { ElementType } from "../types";
+import { ElementType, Element } from "../types";
+import { DEFAULT_FONT_SIZE } from "./defaults";
 
 export type ConfigParams =
   | "fontFamily"
@@ -22,6 +23,8 @@ interface ToolDescription {
   resizable?: boolean; // if true, show resize handles.  Some things should only resize via adapting to their content.
   key?: string | string[]; // keyboard shortcut or shortcuts
   type?: ElementType;
+  size?: (Element) => { w: number; h: number };
+  select?: boolean; // if true, select and set to edit on create
 }
 
 export const TOOLS: { [tool: string]: ToolDescription } = {
@@ -53,6 +56,7 @@ export const TOOLS: { [tool: string]: ToolDescription } = {
     config: new Set(["fontFamily", "fontSize", "color"]),
     key: "t",
     type: "text",
+    select: true,
   },
   note: {
     icon: "note",
@@ -61,6 +65,7 @@ export const TOOLS: { [tool: string]: ToolDescription } = {
     config: new Set(["fontFamily", "fontSize", "color"]),
     key: "n",
     type: "note",
+    select: true,
   },
   pen: {
     icon: "pen",
@@ -72,6 +77,7 @@ export const TOOLS: { [tool: string]: ToolDescription } = {
     type: "pen",
   },
   code: {
+    select: true,
     icon: "jupyter",
     cursor: "crosshair",
     tip: "Jupyter Code Cell",
@@ -79,6 +85,12 @@ export const TOOLS: { [tool: string]: ToolDescription } = {
     resizable: true,
     key: "j",
     type: "code",
+    size: (element) => {
+      return {
+        w: 650,
+        h: 16 + 6 * (element.data?.fontSize ?? DEFAULT_FONT_SIZE),
+      };
+    },
   },
   icon: {
     icon: "icons",
@@ -94,13 +106,19 @@ export const TOOLS: { [tool: string]: ToolDescription } = {
     tip: "Chat",
     config: new Set(["color"]),
     key: "c",
-    type: "icon",
+    type: "chat",
+    select: true,
+    size: () => {
+      return { w: 375, h: 450 };
+    },
   },
   timer: {
     icon: "stopwatch",
     cursor: "crosshair",
     tip: "Stopwatches and Timers",
     config: new Set(["fontFamily", "fontSize", "color", "countdown"]),
+    key: "s",
+    select: true,
     type: "timer",
   },
   frame: {
