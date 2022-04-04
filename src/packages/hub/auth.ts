@@ -248,7 +248,7 @@ const TwitterStrategyConf: StrategyConf = {
 function parse_openid_profile(json: any) {
   const profile: any = {};
   profile.id = json.sub || json.id;
-  profile.displayName = json.name;
+  profile.displayName = json.name || json.username;
 
   var first_email;
   if (json.emails) first_email = json.emails[0];
