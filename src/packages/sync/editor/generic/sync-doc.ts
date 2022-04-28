@@ -12,6 +12,11 @@ undo, save to disk, etc.
 
 This code is run *both* in browser clients and under node.js
 in projects, and behaves slightly differently in each case.
+
+EVENTS:
+
+- before-change: fired before merging in changes from upstream
+- ... TODO
 */
 
 /* OFFLINE_THRESH_S - If the client becomes disconnected from
@@ -796,7 +801,14 @@ export class SyncDoc extends EventEmitter {
         // Do nothing here.
       }
     }
+    // WARNING: that 'closed' is emitted at the beginning of the
+    // close function (before anything async) for the project is
+    // assumed in src/packages/project/sync/sync-doc.ts, because
+    // that ensures that the moment close is called we lock trying
+    // try create the syncdoc again until closing is finished.
+    // (This set_state call emits "closed"):
     this.set_state("closed");
+
     this.emit("close");
 
     // must be after the emits above, so clients know
@@ -1346,7 +1358,6 @@ export class SyncDoc extends EventEmitter {
     const doc = patch_list.value();
     this.last = this.doc = doc;
     this.patches_table.on("change", this.handle_patch_update.bind(this));
-    this.patches_table.on("before-change", () => this.emit("before-change"));
     this.patches_table.on("saved", this.handle_offline.bind(this));
     this.patch_list = patch_list;
     dbg("done");
@@ -1588,6 +1599,7 @@ export class SyncDoc extends EventEmitter {
       dbg(`state=${this.state} not ready so not saving`);
       return;
     }
+    // Compute any patches.
     while (!this.doc.is_equal(this.last)) {
       dbg("something to save");
       this.emit("user-change");
@@ -1602,7 +1614,7 @@ export class SyncDoc extends EventEmitter {
         continue;
       }
       dbg("Compute new patch.");
-      this.sync_remote_and_doc();
+      this.sync_remote_and_doc(false);
       // Emit event since this syncstring was
       // changed locally (or we wouldn't have had
       // to save at all).
@@ -2441,6 +2453,11 @@ export class SyncDoc extends EventEmitter {
       return;
     }
 
+    // Make sure to include changes to the live document.
+    // A side effect of save if we didn't do this is potentially
+    // discarding them, which is obviously not good.
+    this.commit();
+
     dbg("initiating the save");
     if (!this.has_unsaved_changes()) {
       dbg("no unsaved changes, so don't save");
@@ -2735,7 +2752,7 @@ export class SyncDoc extends EventEmitter {
         this.patch_list.add(v);
 
         dbg("waiting for remote and doc to sync...");
-        this.sync_remote_and_doc();
+        this.sync_remote_and_doc(v.length > 0);
         await this.patches_table.save();
         if (this.state === ("closed" as State)) return; // closed during await; nothing further to do
         dbg("remote and doc now synced");
@@ -2780,6 +2797,9 @@ export class SyncDoc extends EventEmitter {
      for the given number of ms.  Calling it regularly while
      user is actively editing to avoid them being bothered
      by upstream patches getting merged in.
+
+     IMPORTANT: I implemented this, but it is NOT used anywhere
+     else in the codebase, so don't trust that it works.
   */
 
   public disable_sync(): void {
@@ -2788,7 +2808,7 @@ export class SyncDoc extends EventEmitter {
 
   public enable_sync(): void {
     this.sync_is_disabled = false;
-    this.sync_remote_and_doc();
+    this.sync_remote_and_doc(true);
   }
 
   public delay_sync(timeout_ms = 2000): void {
@@ -2803,14 +2823,25 @@ export class SyncDoc extends EventEmitter {
     Merge remote patches and live version to create new live version,
     which is equal to result of applying all patches.
   */
-  private sync_remote_and_doc(): void {
+  private sync_remote_and_doc(upstreamPatches: boolean): void {
     if (this.last == null || this.doc == null || this.sync_is_disabled) {
       return;
     }
 
-    if (this.state == "ready") {
-      // First save any unsaved changes from our live version.
+    // Critical to save what we have now so it doesn't get overwritten during
+    // before-change or setting this.doc below.  This caused
+    //    https://github.com/sagemathinc/cocalc/issues/5871
+    this.commit();
+
+    if (upstreamPatches && this.state == "ready") {
+      // First save any unsaved changes from the live document, which this
+      // sync-doc doesn't acutally know the state of.  E.g., this is some
+      // rapidly changing live editor with changes not yet saved here.
       this.emit("before-change");
+      // As a result of the emit in the previous line, all kinds of
+      // nontrivial listener code probably just ran, and it should
+      // have updated this.doc.  We commit this.doc, so that the
+      // upstream patches get applied against the correct live this.doc.
       this.commit();
     }
 

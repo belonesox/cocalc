@@ -11,6 +11,7 @@ Markdown editor
 // rather than a directory for each file.
 const AUX_FILE_EXT = "upload";
 
+import { isEqual } from "lodash";
 import { join } from "path";
 import * as CodeMirror from "codemirror";
 type EventHandlerFunction = (cm: CodeMirror.Editor) => void;
@@ -31,6 +32,7 @@ import {
   ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -90,7 +92,7 @@ interface Props {
   lineWrapping?: boolean;
   lineNumbers?: boolean;
   autoFocus?: boolean;
-  cmOptions?: { [key: string]: any }; // if given, use this for all CodeMirror options and ignore anything derived from other inputs, e.g., lineNumbers, above.
+  cmOptions?: { [key: string]: any }; // if given, use this for CodeMirror options, taking precedence over anything derived from other inputs, e.g., lineNumbers, above and account settings.
   selectionRef?: MutableRefObject<{
     setSelection: Function;
     getSelection: Function;
@@ -132,9 +134,6 @@ export function MarkdownInput({
   extraHelp,
   hideHelp,
   fontSize,
-  styleActiveLine,
-  lineWrapping,
-  lineNumbers,
   autoFocus,
   cmOptions,
   selectionRef,
@@ -154,8 +153,21 @@ export function MarkdownInput({
 }: Props) {
   const cm = useRef<CodeMirror.Editor>();
   const textarea_ref = useRef<HTMLTextAreaElement>(null);
-  const theme = useRedux(["account", "editor_settings", "theme"]);
-  const bindings = useRedux(["account", "editor_settings", "bindings"]);
+  const editor_settings = useRedux(["account", "editor_settings"]);
+  const options = useMemo(() => {
+    return {
+      indentUnit: 2,
+      indentWithTabs: false,
+      autoCloseBrackets: editor_settings.get("auto_close_brackets", false),
+      lineWrapping: editor_settings.get("line_wrapping", true),
+      lineNumbers: editor_settings.get("line_numbers", false),
+      matchBrackets: editor_settings.get("match_brackets", false),
+      styleActiveLine: editor_settings.get("style_active_line", true),
+      theme: editor_settings.get("theme", "default"),
+      ...cmOptions,
+    };
+  }, [editor_settings, cmOptions]);
+
   const defaultFontSize = useTypedRedux("account", "font_size");
 
   const dropzone_ref = useRef<Dropzone>(null);
@@ -258,47 +270,21 @@ export function MarkdownInput({
       };
     }
 
-    const options = cmOptions ?? {
-      inputStyle: "contenteditable" as "contenteditable", // needed for spellcheck to work!
-      spellcheck: true,
-      styleActiveLine,
-      lineWrapping,
-      lineNumbers,
-    };
     cm.current = CodeMirror.fromTextArea(node, {
       ...options,
+      inputStyle: "contenteditable" as "contenteditable", // needed for spellcheck to work!
+      spellcheck: true,
       extraKeys,
       mode: { name: "gfm" },
     });
+
     if (getValueRef != null) {
       getValueRef.current = cm.current.getValue.bind(cm.current);
     }
     // UNCOMMENT FOR DEBUGGING ONLY
     // (window as any).cm = cm.current;
     cm.current.setValue(value ?? "");
-    if (onChange != null) {
-      let f = (editor, change) => {
-        if (change.origin == "setValue") {
-          // Since this is a controlled component, firing onChange for this
-          // could lead to an infinite loop and randomly crash the browser.
-          return;
-        }
-        if (current_uploads_ref.current != null) {
-          // IMPORTANT: we do NOT report the latest version back while
-          // uploading files.  Otherwise, if more than one is being
-          // uploaded at once, then we end up with an infinite loop
-          // of updates.  In any case, once all the uploads finish
-          // we'll start reporting chanages again.  This is fine
-          // since you don't want to submit input *during* uploads anyways.
-          return;
-        }
-        onChange(editor.getValue());
-      };
-      if (saveDebounceMs) {
-        f = debounce(f, saveDebounceMs);
-      }
-      cm.current.on("change", f);
-    }
+    cm.current.on("change", saveValue);
 
     if (onBlur != null) {
       cm.current.on("blur", (editor) => onBlur(editor.getValue()));
@@ -319,7 +305,7 @@ export function MarkdownInput({
     if (onCursors != null) {
       cm.current.on("cursorActivity", () => {
         if (cm.current == null || !isFocusedRef.current) return;
-        if ((cm.current as any)._setValueNoJump) return;
+        if (ignoreChangeRef.current) return;
         onCursors(
           cm.current
             .getDoc()
@@ -332,14 +318,14 @@ export function MarkdownInput({
     if (onUndo != null) {
       cm.current.undo = () => {
         if (cm.current == null) return;
-        onChange?.(cm.current.getValue());
+        saveValue();
         onUndo();
       };
     }
     if (onRedo != null) {
       cm.current.redo = () => {
         if (cm.current == null) return;
-        onChange?.(cm.current.getValue());
+        saveValue();
         onRedo();
       };
     }
@@ -459,37 +445,69 @@ export function MarkdownInput({
   }, []);
 
   useEffect(() => {
-    cm.current?.setOption("theme", theme == null ? "default" : theme);
-  }, [theme]);
-
-  useEffect(() => {
-    cm.current?.setOption("lineNumbers", cmOptions?.lineNumbers ?? lineNumbers);
-  }, [cmOptions?.lineNumbers ?? lineNumbers]);
-
-  useEffect(() => {
-    cm.current?.setOption(
-      "lineWrapping",
-      cmOptions?.lineWrapping ?? lineWrapping
-    );
-  }, [cmOptions?.lineWrapping ?? lineWrapping]);
-
-  useEffect(() => {
+    const bindings = editor_settings.get("bindings");
     if (bindings == null || bindings == "standard") {
       cm.current?.setOption("keyMap", "default");
     } else {
       cm.current?.setOption("keyMap", bindings);
     }
-  }, [bindings]);
+  }, [editor_settings.get("bindings")]);
 
   useEffect(() => {
+    if (cm.current == null) return;
+    for (const key in options) {
+      const opt = options[key];
+      if (!isEqual(cm.current.options[key], opt)) {
+        if (opt != null) {
+          cm.current.setOption(key as any, opt);
+        }
+      }
+    }
+  }, [options]);
+
+  const ignoreChangeRef = useRef<boolean>(false);
+  const saveValue = useMemo(() => {
+    // save value to owner via onChange
+    if (onChange == null) return () => {}; // no op
+    const f = () => {
+      if (cm.current == null) return;
+      if (ignoreChangeRef.current) return;
+      if (current_uploads_ref.current != null) {
+        // IMPORTANT: we do NOT report the latest version back while
+        // uploading files.  Otherwise, if more than one is being
+        // uploaded at once, then we end up with an infinite loop
+        // of updates.  In any case, once all the uploads finish
+        // we'll start reporting changes again.  This is fine
+        // since you don't want to submit input *during* uploads anyways.
+        return;
+      }
+      const newValue = cm.current.getValue();
+      if (value != newValue) {
+        onChange(newValue);
+      }
+    };
+    if (saveDebounceMs) {
+      return debounce(f, saveDebounceMs);
+    } else {
+      return f;
+    }
+  }, []);
+
+  const setValueNoJump = useCallback((newValue: string | undefined) => {
     if (
-      value == null ||
+      newValue == null ||
       cm.current == null ||
-      cm.current.getValue() === value
+      cm.current.getValue() === newValue
     ) {
       return;
     }
-    cm.current.setValueNoJump(value);
+    ignoreChangeRef.current = true;
+    cm.current.setValueNoJump(newValue);
+    ignoreChangeRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    setValueNoJump(value);
     if (upload_close_preview_ref.current != null) {
       upload_close_preview_ref.current(true);
     }
@@ -517,7 +535,7 @@ export function MarkdownInput({
       return;
     }
     cm.current.replaceRange(s, cm.current.getCursor());
-    onChange?.(cm.current.getValue());
+    saveValue();
   }
 
   function upload_complete(file: {
@@ -529,7 +547,6 @@ export function MarkdownInput({
       throw Error("path must be set if enableUploads is set.");
     }
 
-    // console.log("upload_complete", file);
     if (current_uploads_ref.current != null) {
       delete current_uploads_ref.current[file.name];
       if (len(current_uploads_ref.current) == 0) {
@@ -552,24 +569,35 @@ export function MarkdownInput({
     } else {
       s1 = upload_link(path, file);
     }
-    cm.current.setValueNoJump(input.replace(s0, s1));
-    onChange?.(cm.current.getValue());
+    const newValue = input.replace(s0, s1);
+    setValueNoJump(newValue);
+    saveValue();
   }
 
   function upload_removed(file: { name: string; type: string }): void {
     if (cm.current == null) return;
-    // console.log("upload_removed", file);
     if (project_id == null || path == null) {
       throw Error("project_id and path must be set if enableUploads is set.");
     }
+    if (!current_uploads_ref.current?.[file.name]) {
+      // it actually succeeded if this is not set -- it was removed
+      // via upload_complete above.
+      return;
+    }
+    delete current_uploads_ref.current[file.name];
+    if (onUploadEnd != null) {
+      onUploadEnd();
+    }
+
     const input = cm.current.getValue();
     const s = upload_link(path, file);
     if (input.indexOf(s) == -1) {
       // not there anymore; maybe user already submitted -- do nothing further.
       return;
     }
-    cm.current.setValueNoJump(input.replace(s, ""));
-    onChange?.(cm.current.getValue());
+    const newValue = input.replace(s, "");
+    setValueNoJump(newValue);
+    saveValue();
     // delete from project itself
     const target = join(aux_file(path, AUX_FILE_EXT), file.name);
     // console.log("deleting target", target, { paths: [target] });

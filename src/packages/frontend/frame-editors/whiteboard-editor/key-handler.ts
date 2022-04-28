@@ -36,6 +36,10 @@ export default function getKeyHandler(
   return (e) => {
     const node = actions._get_frame_node(frameId);
     if (node == null) return;
+    if (e?.key == null) {
+      // an issue with e.key being defined was reported by a user.
+      return;
+    }
     const key = e.key.toLowerCase();
     //console.log(key);
 
@@ -150,6 +154,7 @@ export default function getKeyHandler(
           id,
         }))
       );
+      actions.clearSelection(frameId);
       return;
     }
     if (!(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey)) {

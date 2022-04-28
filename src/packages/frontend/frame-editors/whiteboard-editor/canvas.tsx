@@ -67,6 +67,7 @@ import {
   SELECTED_BORDER_COLOR,
   SELECTED_PADDING,
   SELECTED_BORDER_TYPE,
+  EDIT_BORDER_TYPE,
   SELECTED_BORDER_WIDTH,
 } from "./elements/style";
 import NotFocused from "./not-focused";
@@ -98,6 +99,7 @@ import {
   DEFAULT_FONT_SIZE,
   MIN_FONT_SIZE,
   MAX_FONT_SIZE,
+  ERASE_SIZE,
 } from "./tools/defaults";
 import { throttle } from "lodash";
 import Draggable from "react-draggable";
@@ -353,6 +355,8 @@ export default function Canvas({
     clientY: number;
   } | null>(null);
   const ignoreNextClick = useRef<boolean>(false);
+  const wacomEraseRef = useRef<boolean>(false);
+
   // position of mouse right now not transformed in any way,
   // just in case we need it. This is clientX, clientY off
   // of the canvas div.
@@ -592,9 +596,11 @@ export default function Canvas({
             ...(selected
               ? {
                   cursor: "text",
-                  border: `${
-                    SELECTED_BORDER_WIDTH / canvasScale
-                  }px ${SELECTED_BORDER_TYPE} ${
+                  border: `${SELECTED_BORDER_WIDTH / canvasScale}px ${
+                    frame.desc.get("editFocus")
+                      ? EDIT_BORDER_TYPE
+                      : SELECTED_BORDER_TYPE
+                  } ${
                     frame.desc.get("editFocus")
                       ? EDIT_BORDER_COLOR
                       : SELECTED_BORDER_COLOR
@@ -610,6 +616,7 @@ export default function Canvas({
               : undefined),
             width: "100%",
             height: "100%",
+            /* We do not use overflow:'hidden' here since that hides the floating menus for the multimarkdown editor. */
           }}
         >
           {elt}
@@ -661,11 +668,12 @@ export default function Canvas({
         >
           <Cursors cursors={cursors?.[id]} canvasScale={canvasScale} />
           <NotFocused
-            id={id}
+            element={element}
             selectable={selectedTool == "select"}
             edgeCreate={selectedTool == "edge"}
             edgeStart={isEdgeStart}
             frame={frame}
+            canvasScale={canvasScale}
           >
             {elt}
           </NotFocused>
@@ -874,6 +882,7 @@ export default function Canvas({
   }
 
   function handleClick(e) {
+    if (wacomEraseRef.current) return;
     if (!frame.isFocused) return;
     if (ignoreNextClick.current) {
       ignoreNextClick.current = false;
@@ -938,6 +947,10 @@ export default function Canvas({
       }, []);
 
   const onMouseDown = (e) => {
+    if (wacomEraseRef.current) {
+      // WACOM tablet erase.
+      return;
+    }
     if (selectedTool == "hand" || e.button == MIDDLE_MOUSE_BUTTON) {
       const c = canvasRef.current;
       if (c == null) return;
@@ -976,6 +989,12 @@ export default function Canvas({
   };
 
   const onMouseUp = (e) => {
+    if (wacomEraseRef.current) {
+      wacomEraseRef.current = false;
+      mousePath.current = null; // also clear path so don't end up drawing a point.
+      // WACOM tablet erase.
+      return;
+    }
     if (handRef.current != null) {
       handRef.current = null;
       return;
@@ -997,8 +1016,7 @@ export default function Canvas({
           transformsRef.current.windowToDataNoScale(p1.x, p1.y)
         );
         if (selectedTool == "frame") {
-          // make a frame at the selection.  Note that we put
-          // it UNDER everything.
+          // make a frame at the selection.
           const elt = getToolElement("frame");
           if (elt.data?.aspectRatio) {
             const ar = aspectRatioToNumber(elt.data.aspectRatio);
@@ -1007,6 +1025,7 @@ export default function Canvas({
             }
           }
 
+          // The zMin - 1 is to put it UNDER everything so far.
           const { id } = frame.actions.createElement(
             { ...elt, ...rect, z: transformsRef.current.zMin - 1 },
             true
@@ -1135,6 +1154,10 @@ export default function Canvas({
   }
 
   const onMouseMove = (e, touch = false) => {
+    if (wacomEraseRef.current) {
+      // WACOM tablet erase.
+      return;
+    }
     // this us used for zooming, etc.
     mousePosRef.current = { clientX: e.clientX, clientY: e.clientY };
 
@@ -1229,6 +1252,30 @@ export default function Canvas({
     }
   };
 
+  const onPointerMove = (e) => {
+    if (e.buttons == 32) {
+      wacomEraseRef.current = true;
+      // WACOM tablet erase object.  This was requested in
+      // https://github.com/sagemathinc/cocalc/issues/5874
+      // and I "reverse engineered" that the only way to detect
+      // erase is via pointermove where it reports 32 buttons.
+      const point = getMousePos(e);
+      if (point == null) return;
+      const { x, y } = transformsRef.current.windowToDataNoScale(
+        point.x,
+        point.y
+      );
+      const size = Math.max(2, ERASE_SIZE / scaleRef.current);
+      const rect = {
+        x: x - size / 2,
+        y: y - size / 2,
+        w: size,
+        h: size,
+      };
+      frame.actions.deleteElements(getOverlappingElements(elements, rect));
+    }
+  };
+
   //   if (!isNavigator) {
   //     window.x = {
   //       scaleDivRef,
@@ -1278,6 +1325,7 @@ export default function Canvas({
       onTouchMove={!isNavigator ? onTouchMove : undefined}
       onTouchEnd={!isNavigator ? onTouchEnd : undefined}
       onTouchCancel={!isNavigator ? onTouchCancel : undefined}
+      onPointerMove={!isNavigator ? onPointerMove : undefined}
       onCopy={
         isNavigator
           ? undefined
@@ -1418,6 +1466,9 @@ export default function Canvas({
                   : TOOLS[selectedTool]?.cursor
                 : undefined,
             position: "relative",
+            overflow: "hidden",
+            width: `${transformsRef.current.width}px`,
+            height: `${transformsRef.current.height}px`,
           }}
         >
           {!isNavigator && (

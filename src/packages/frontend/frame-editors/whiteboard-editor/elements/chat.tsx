@@ -13,11 +13,11 @@ import MultiMarkdownInput from "@cocalc/frontend/editors/markdown-input/multimod
 import useEditFocus from "./edit-focus";
 import { useDebouncedCallback } from "use-debounce";
 import Composing from "./chat-composing";
-import { useIsMountedRef } from "@cocalc/frontend/app-framework";
-import { delay } from "awaiting";
 import useWheel from "./scroll-wheel";
 
 import { ChatLog, getChatStyle, messageStyle } from "./chat-static";
+
+const INPUT_HEIGHT = "123px";
 
 interface Props {
   element: Element;
@@ -59,19 +59,12 @@ function Conversation({ element, focused }: Props) {
     }
   }, [element, focused]);
 
-  const isMountedRef = useIsMountedRef();
-  const clearInput = async () => {
+  const clearInput = () => {
     setInput("");
-    // There's a potential very slight chance that additional input
-    // from slate will get set in the next event loop, so we make
-    // sure to clear that.  This is due to how onChange and slate work.
-    await delay(1);
-    if (isMountedRef.current) {
-      setInput("");
-    }
+    saveChat.cancel();
   };
 
-  // When the component goes to be unmounted, we will fetch data if the input has changed.
+  // When the component is unmounted, we will fetch data if the input has changed.
   useEffect(
     () => () => {
       saveChat.flush();
@@ -118,17 +111,20 @@ function Conversation({ element, focused }: Props) {
               setEditFocus(false);
             }}
             isFocused={focused && editFocus}
-            cacheId={element.id}
             hideHelp
             noVfill
             minimal
             placeholder="Type a message..."
-            height={"123px"}
+            height={INPUT_HEIGHT}
             value={input}
             style={{
-              flex: 1,
+              width: `${element.w - 152}px`, /* use exact computation for width so when there is a very wide single line with no spaces, still keeps right size.  This is a little ugly, but works fine since we know the dimensions of the element. */
               ...(mode == "editor"
-                ? { border: "1px solid #ccc", padding: "10px" }
+                ? {
+                    border: "1px solid #ccc",
+
+                    paddingLeft: "5px",
+                  }
                 : undefined),
             }}
             onChange={(input) => {
@@ -152,28 +148,32 @@ function Conversation({ element, focused }: Props) {
               visibility:
                 !editFocus || mode == "markdown" ? "hidden" : undefined,
               bottom: "-36px",
-              left: "122px",
+              left: "126px",
               position: "absolute",
               boxShadow: "1px 3px 5px #ccc",
               margin: "5px",
               minWidth: "500px",
               background: "white",
               fontFamily: "sans-serif",
+              paddingRight: 0, // undoing a temporary hack
             }}
             modeSwitchStyle={{
               visibility: !editFocus ? "hidden" : undefined,
               bottom: "-30px",
               left: 0,
-              width: "126px",
+              width: "130px",
               boxShadow: "1px 3px 5px #ccc",
             }}
             onModeChange={setMode}
+            cmOptions={{
+              lineNumbers: false, // implementation of line numbers in codemirror is incompatible with CSS scaling
+            }}
           />
           <Tooltip title="Send message (shift+enter)">
             <Button
               disabled={!input.trim()}
               type="primary"
-              style={{ height: "100%", marginLeft: "5px" }}
+              style={{ height: INPUT_HEIGHT, marginLeft: "5px" }}
               onClick={() => {
                 actions.sendChat({ id: element.id, input });
                 clearInput();

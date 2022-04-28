@@ -14,11 +14,10 @@ import { delay } from "awaiting";
 import { React, useRef, usePrevious } from "../app-framework";
 import * as underscore from "underscore";
 import { Map as ImmutableMap } from "immutable";
-import { three_way_merge } from "@cocalc/sync/editor/generic/util";
 import { Complete, Actions as CompleteActions } from "./complete";
 import { Cursors } from "./cursors";
 import CodeMirror from "codemirror";
-import { CSSProperties, useEffect } from "react";
+import { CSSProperties, MutableRefObject, useEffect, useState } from "react";
 
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 import { EditorFunctions } from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/actions";
@@ -35,7 +34,7 @@ const cache = new LRU<string, CachedInfo>({ max: 1000 });
 
 const FOCUSED_STYLE: React.CSSProperties = {
   width: "100%",
-  overflowX: "hidden",
+  overflow: "hidden",
   border: "1px solid #cfcfcf",
   borderRadius: "2px",
   background: "#f7f7f7",
@@ -91,6 +90,8 @@ interface CodeMirrorEditorProps {
   onBlur?: () => void;
   contenteditable?: boolean; // make true for whiteboard so works when scaled.
   refresh?: any; // if this changes, then cm.refresh() is called.
+  getValueRef?: MutableRefObject<() => string>;
+  canvasScale?: number;
 }
 
 export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
@@ -115,6 +116,8 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   onBlur,
   contenteditable,
   refresh,
+  getValueRef,
+  canvasScale,
 }: CodeMirrorEditorProps) => {
   const cm = useRef<any>(null);
   const cm_last_remote = useRef<any>(null);
@@ -161,18 +164,11 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
     cm_refresh();
   }, [font_size, is_scrolling]);
 
-  // In some cases (e.g., tab completion when selecting via keyboard)
-  // nextProps.value and value are the same, but they
-  // do not equal cm.current.getValue().  The complete prop changes
-  // so the component updates, but without checking cm.getValue(),
-  // we would fail to update the cm editor, which would is
-  // a disaster.  May be root cause of
-  //    https://github.com/sagemathinc/cocalc/issues/3978
   useEffect(() => {
-    if (cm.current?.getValue() != value) {
-      cm_merge_remote(value);
+    if (cm.current != null) {
+      cm.current.setValueNoJump(value);
     }
-  }, [value, cm.current?.getValue()]);
+  }, [value]);
 
   useEffect(() => {
     // can't do anything if there is no codemirror editor
@@ -197,6 +193,38 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       $(cm.current.getWrapperElement()).css({ paddingBottom: 0 });
     }
   }, [is_focused]);
+
+  const [containerHeight, setContainerHeight] = useState<string | undefined>(
+    undefined
+  );
+  const divRef = useRef<any>();
+  useEffect(() => {
+    if (canvasScale == null || canvasScale <= 1) return;
+    // Used to support embedding cells in a css scaled div, e.g., which
+    // is used in the whiteboard.  This is pretty hacky, because CodeMirror5
+    // does not and will probably never support any CSS transforms:
+    //    https://github.com/codemirror/CodeMirror/issues/2443
+    const doUpdate = () => {
+      if (divRef.current != null) {
+        const sizer = $(divRef.current).find(".CodeMirror-sizer");
+        const height = sizer.height();
+        if (height) {
+          setContainerHeight(`${height / canvasScale + 6}px`);
+          divRef.current.scrollTop = 0;
+        }
+      }
+    };
+    const updateContainerHeight = () => {
+      doUpdate();
+      requestAnimationFrame(doUpdate);
+    };
+    updateContainerHeight();
+    cm.current?.on("change", updateContainerHeight);
+    return () => {
+      setContainerHeight(undefined);
+      cm.current?.off("change", updateContainerHeight);
+    };
+  }, [canvasScale]);
 
   function cm_destroy(): void {
     if (cm.current != null) {
@@ -315,29 +343,9 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       // since some code, e.g., for introspection when doing evaluation,
       // which runs immediately after this, assumes the Store state
       // is set for the editor.
-      actions.set_cell_input(id, value);
+      actions.set_cell_input(id, value, true);
     }
     return value;
-  }
-
-  function cm_merge_remote(remote: string): void {
-    if (cm.current == null) {
-      return;
-    }
-    if (cm_last_remote.current == null) {
-      cm_last_remote.current = "";
-    }
-    if (cm_last_remote.current === remote) {
-      return; // nothing to do
-    }
-    const local = cm.current.getValue();
-    const new_val = three_way_merge({
-      base: cm_last_remote.current,
-      local,
-      remote,
-    });
-    cm_last_remote.current = remote;
-    cm.current.setValueNoJump(new_val);
   }
 
   function cm_undo(): void {
@@ -583,6 +591,10 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
       node.parentNode.replaceChild(elt, node);
     }, options0);
 
+    if (getValueRef != null) {
+      getValueRef.current = cm.current.getValue.bind(cm.current);
+    }
+
     cm.current.save = () => actions.save();
     if (actions != null && options0.keyMap === "vim") {
       vim_mode.current = true;
@@ -708,7 +720,10 @@ export const CodeMirrorEditor: React.FC<CodeMirrorEditorProps> = ({
   return (
     <div style={{ width: "100%", overflow: "auto" }}>
       {render_cursors()}
-      <div style={{ ...FOCUSED_STYLE, ...style }}>
+      <div
+        ref={divRef}
+        style={{ ...FOCUSED_STYLE, height: containerHeight, ...style }}
+      >
         <pre
           ref={cm_ref}
           style={{

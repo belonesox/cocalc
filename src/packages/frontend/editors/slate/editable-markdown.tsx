@@ -67,13 +67,16 @@ import { EditorFunctions } from "@cocalc/frontend/editors/markdown-input/multimo
 import type { SlateEditor } from "./types";
 export type { SlateEditor };
 
-// Whether or not to use windowing (=only rendering visible elements).
+// Whether or not to use windowing by default (=only rendering visible elements).
 // This is unfortunately essential.  I've tried everything I can think
 // of to optimize slate without using windowing, and I just can't do it
 // (and my attempts have always been misleading).  I think the problem is
 // that all the subtle computations that are done when selection, etc.
 // gets updated, just have to be done one way or another anyways. Doing
 // them without the framework of windowing is probably much harder.
+// NOTE: we also fully use slate without windowing in many context in which
+// we're editing small snippets of Markdown, e.g., Jupyter notebook markdown
+// cells, task lists, whiteboard sticky notes, etc.
 const USE_WINDOWING = true;
 // const USE_WINDOWING = false;
 
@@ -159,8 +162,6 @@ export const EditableMarkdown: React.FC<Props> = React.memo(
     const font_size = font_size0 ?? desc.get("font_size") ?? 14; // so possible to use without specifying this.  TODO: should be from account settings
 
     const editor = useMemo(() => {
-      const cur = actions.getSlateEditor?.(id);
-      if (cur != null) return cur;
       const ed = withNonfatalRange(
         withInsertBreakHack(
           withNormalize(
@@ -189,6 +190,7 @@ export const EditableMarkdown: React.FC<Props> = React.memo(
         return ed._hasUnsavedChanges !== ed.children;
       };
 
+      ed.markdownValue = value;
       ed.getMarkdownValue = () => {
         if (ed.markdownValue != null && !ed.hasUnsavedChanges()) {
           return ed.markdownValue;
@@ -424,6 +426,7 @@ export const EditableMarkdown: React.FC<Props> = React.memo(
 
       const markdown = editor.getMarkdownValue();
       actions.set_value(markdown);
+      actions.syncstring_commit?.();
 
       // Record that the syncstring's value is now equal to ours:
       editor.resetHasUnsavedChanges();
@@ -556,8 +559,11 @@ export const EditableMarkdown: React.FC<Props> = React.memo(
         }
       } finally {
         // In all cases, now that we have transformed editor into the new value
-        // let's save the fact that we haven't changed anything yet:
+        // let's save the fact that we haven't changed anything yet and we
+        // know the markdown state with zero changes.  This is important, so
+        // we don't save out a change if we don't explicitly make one.
         editor.resetHasUnsavedChanges();
+        editor.markdownValue = value;
       }
 
       try {

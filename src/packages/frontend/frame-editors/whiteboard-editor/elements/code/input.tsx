@@ -1,4 +1,10 @@
-import { useMemo, useState } from "react";
+import {
+  MutableRefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useFrameContext } from "../../hooks";
 import { Element } from "../../types";
 import { fromJS, Map } from "immutable";
@@ -24,6 +30,7 @@ interface Props {
   isFocused?: boolean;
   cursors?: { [account_id: string]: any[] };
   mode?;
+  getValueRef: MutableRefObject<() => string>;
 }
 
 export default function Input({
@@ -34,6 +41,7 @@ export default function Input({
   isFocused,
   cursors,
   mode,
+  getValueRef,
 }: Props) {
   const frame = useFrameContext();
   const [complete, setComplete] = useState<Map<string, any> | undefined>(
@@ -43,10 +51,40 @@ export default function Input({
     return new Actions(frame, element.id, setComplete);
   }, [element.id]); // frame can't change meaningfully.
 
+  const saveEditorValue = useCallback(() => {
+    if (!getValueRef.current) return;
+    const str = getValueRef.current();
+    if (str == (element.str ?? "") || frame.actions.in_undo_mode()) {
+      // No change so do NOT save, which wastes resources and
+      // causes subtle bugs.  As an example, if str is undefined
+      // (right after creating element), then commit sets string
+      // atomically to '', rather than being a no-op, which undoes
+      // another users first entry... which is obviously very bad.
+      return;
+    }
+    frame.actions.setElement({
+      obj: { id: element.id, str },
+      commit: true,
+    });
+  }, [element.id]);
+
+  useEffect(() => {
+    if (frame.actions._syncstring == null) return;
+    frame.actions._syncstring.on("before-change", saveEditorValue);
+    return () => {
+      frame.actions._syncstring.removeListener(
+        "before-change",
+        saveEditorValue
+      );
+    };
+  }, [element.id]);
+
   return (
     <div>
       <CodeMirrorEditor
-        refresh={canvasScale /* fresh if canvas scale changes */}
+        canvasScale={canvasScale}
+        getValueRef={getValueRef}
+        refresh={canvasScale /* refresh if canvas scale changes */}
         contenteditable={
           true /* we *must* use contenteditable so scaling works */
         }

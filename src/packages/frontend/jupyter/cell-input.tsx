@@ -9,7 +9,7 @@ React component that describes the input of a cell
 
 declare const $: any;
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { React, Rendered } from "../app-framework";
 import { Map, fromJS } from "immutable";
 import { Button, ButtonGroup } from "react-bootstrap";
@@ -25,6 +25,10 @@ import { CellHiddenPart } from "./cell-hidden-part";
 import useNotebookFrameActions from "@cocalc/frontend/frame-editors/jupyter-editor/cell-notebook/hook";
 import { JupyterActions } from "./browser-actions";
 import MarkdownInput from "@cocalc/frontend/editors/markdown-input/multimode";
+
+// TODO: plan to switch to this soon!
+// import MostlyStaticMarkdown from "@cocalc/frontend/editors/slate/mostly-static-markdown";
+
 import { SAVE_DEBOUNCE_MS } from "@cocalc/frontend/frame-editors/code-editor/const";
 
 function href_transform(
@@ -135,10 +139,10 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
           opt = props.cm_options.get("markdown");
           break;
         case "raw":
-        default:
+        default: // no use with no mode
           opt = props.cm_options.get("options");
           opt = opt.set("mode", {});
-          opt = opt.set("foldGutter", false); // no use with no mode
+          opt = opt.set("foldGutter", false);
           break;
       }
       if (props.is_readonly) {
@@ -160,6 +164,7 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
       }
       return (
         <CodeMirror
+          getValueRef={getValueRef}
           value={value}
           options={options(type)}
           actions={props.actions}
@@ -229,6 +234,7 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
           />
         </div>
       );
+      // <MostlyStaticMarkdown value={value} />
     }
 
     function render_unsupported(type: string): Rendered {
@@ -236,20 +242,28 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
     }
 
     const getValueRef = useRef<any>(null);
+
+    const beforeChange = useCallback(() => {
+      if (getValueRef.current == null || props.actions == null) return;
+      props.actions.set_cell_input(props.id, getValueRef.current(), true);
+    }, [props.id]);
+
     useEffect(() => {
-      if (props.cell.get("cell_type") != "markdown") return;
-      const actions = props.actions;
-      if (actions == null) return;
-      const beforeChange = () => {
-        if (getValueRef.current == null) return;
-        const value = getValueRef.current();
-        actions.set_cell_input(props.id, value, true);
-      };
-      actions.syncdb.on("before-change", beforeChange);
+      if (props.actions == null) return;
+      if (props.is_focused) {
+        props.actions.syncdb.on("before-change", beforeChange);
+      } else {
+        // On loss of focus, we call it once just to be sure that any
+        // changes are saved.  Not doing this would definitely result
+        // in lost work, if user made a change, then immediately switched
+        // cells right when upstream changes are coming in.
+        beforeChange();
+        props.actions.syncdb.removeListener("before-change", beforeChange);
+      }
       return () => {
-        actions.syncdb.removeListener("before-change", beforeChange);
+        props.actions?.syncdb.removeListener("before-change", beforeChange);
       };
-    }, [props.cell.get("cell_type")]);
+    }, [props.is_focused]);
 
     function renderMarkdownEdit() {
       const cmOptions = options("markdown").toJS();
@@ -327,6 +341,7 @@ export const CellInput: React.FC<CellInputProps> = React.memo(
             frameActions.current?.unregister_input_editor(props.cell.get("id"));
           }}
           modeSwitchStyle={{ marginRight: "32px" }}
+          editBarStyle={{ paddingRight: "160px" /* ugly hack for now; bigger than default due to mode switch shift to accomodate cell number. */ }}
         />
       );
     }
