@@ -18,13 +18,13 @@ export function addUserProfileCallback(opts: UserProfileCallbackOpts) {
     L2(`userinfoURL=${userinfoURL}, accessToken=${accessToken}, tokenSecret=${tokenSecret} `); 
     L2(params); 
 
-    var oauth_ = this._oauth;
+    let oauth = this._oauth;
     if (this._oauth2) {
-        oauth_ = this._oauth2;
-        oauth_.useAuthorizationHeaderforGET(true);
-    }    
-    oauth_.get(userinfoURL, accessToken, tokenSecret, (err, body) => {
-    //   L2(`get->body = ${safeJsonStringify(body)}`);
+      oauth = this._oauth2;
+      oauth.useAuthorizationHeaderforGET(true);
+    }
+    oauth.get(userinfoURL, accessToken, (err, body) => {
+      // L2(`get->body = ${safeJsonStringify(body)}`); // Disable logging, becase body can be non-JSON-parseable
 
       let json;
 
